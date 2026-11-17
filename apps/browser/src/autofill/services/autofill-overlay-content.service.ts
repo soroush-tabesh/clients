@@ -66,6 +66,12 @@ import {
   targetedFormCategoryFillTypes,
 } from "./autofill-constants";
 
+/**
+ * Upper bound on waiting for the field-measuring IntersectionObserver. Its initial entries
+ * arrive on the next rendering update; this only matters when a frame is not rendering.
+ */
+const FIELD_RECTS_OBSERVER_TIMEOUT_MS = 100;
+
 export class AutofillOverlayContentService implements AutofillOverlayContentServiceInterface {
   pageDetailsUpdateRequired = false;
   private showInlineMenuIdentities: boolean = false;
@@ -1083,8 +1089,12 @@ export class AutofillOverlayContentService implements AutofillOverlayContentServ
 
     this.mostRecentlyFocusedField = formFieldElement;
     const { paddingRight, paddingLeft } = globalThis.getComputedStyle(formFieldElement);
+    // Measure the focused field and every tracked field in a single observer pass. Awaiting one
+    // observer per field serially costs a rendering frame per field before the menu can open.
+    const allFields = this.formFieldElements;
+    const fieldRects = await this.getFormFieldRects([formFieldElement, ...allFields.keys()]);
     const { width, height, top, left } =
-      await this.getMostRecentlyFocusedFieldRects(formFieldElement);
+      fieldRects.get(formFieldElement) ?? formFieldElement.getBoundingClientRect();
     const autofillFieldData = this.formFieldElements.get(formFieldElement);
 
     this.focusedFieldData = {
@@ -1097,12 +1107,10 @@ export class AutofillOverlayContentService implements AutofillOverlayContentServ
       focusedFieldOpid: autofillFieldData?.opid,
     };
 
-    const allFields = this.formFieldElements;
     const allFieldsRect = [];
-
-    for (const key of allFields.keys()) {
-      const rect = await this.getMostRecentlyFocusedFieldRects(key);
-      allFieldsRect.push({ ...allFields.get(key), rect }); // Add the combined result to the array
+    for (const [key, fieldData] of allFields) {
+      const rect = fieldRects.get(key) ?? key.getBoundingClientRect();
+      allFieldsRect.push({ ...fieldData, rect });
     }
 
     await this.sendExtensionMessage("updateFocusedFieldData", {
@@ -1112,52 +1120,50 @@ export class AutofillOverlayContentService implements AutofillOverlayContentServ
   }
 
   /**
-   * Gets the bounding client rects for the most recently focused field. This method will
-   * attempt to use an intersection observer to get the most recently focused field's
-   * bounding client rects. If the intersection observer is not supported, or the
-   * intersection observer does not return a valid bounding client rect, the form
-   * field element's bounding client rect will be used.
+   * Gets the bounds of the passed form field elements from a single IntersectionObserver.
    *
-   * @param formFieldElement - The form field element that triggered the focus event.
-   */
-  private async getMostRecentlyFocusedFieldRects(
-    formFieldElement: ElementWithOpId<FormFieldElement>,
-  ) {
-    const focusedFieldRects =
-      await this.getBoundingClientRectFromIntersectionObserver(formFieldElement);
-    if (focusedFieldRects) {
-      return focusedFieldRects;
-    }
-
-    return formFieldElement.getBoundingClientRect();
-  }
-
-  /**
-   * Gets the bounds of the form field element from the IntersectionObserver API.
+   * One observer receives the initial entries for every target in the same rendering update,
+   * so measuring many fields costs one frame instead of one frame per field. Elements that
+   * report no usable rect are left out of the result, and callers fall back to
+   * `getBoundingClientRect`. If the observer does not report every target in time (for example,
+   * when the frame is not rendering), the observer is abandoned so opening the menu is never
+   * blocked on it.
    *
-   * @param formFieldElement - The form field element that triggered the focus event.
+   * @param formFieldElements - The form field elements to measure.
    */
-  private async getBoundingClientRectFromIntersectionObserver(
-    formFieldElement: ElementWithOpId<FormFieldElement>,
-  ): Promise<DOMRectReadOnly | null> {
-    if (!("IntersectionObserver" in globalThis) && !("IntersectionObserverEntry" in globalThis)) {
-      return null;
+  private getFormFieldRects(
+    formFieldElements: ElementWithOpId<FormFieldElement>[],
+  ): Promise<Map<Element, DOMRectReadOnly>> {
+    const fieldRects = new Map<Element, DOMRectReadOnly>();
+    const targets = new Set<Element>(formFieldElements);
+    if (
+      !targets.size ||
+      (!("IntersectionObserver" in globalThis) && !("IntersectionObserverEntry" in globalThis))
+    ) {
+      return Promise.resolve(fieldRects);
     }
 
     return new Promise((resolve) => {
+      const reportedTargets = new Set<Element>();
+      // Both are assigned below before any callback can run `finish`.
+      const finish = () => {
+        globalThis.clearTimeout(fallbackTimeout);
+        intersectionObserver.disconnect();
+        resolve(fieldRects);
+      };
+
       const intersectionObserver = new IntersectionObserver(
         (entries) => {
-          let fieldBoundingClientRects: DOMRectReadOnly | null =
-            entries[0]?.boundingClientRect ?? null;
-          if (
-            fieldBoundingClientRects &&
-            (!fieldBoundingClientRects.width || !fieldBoundingClientRects.height)
-          ) {
-            fieldBoundingClientRects = null;
+          for (const { target, boundingClientRect } of entries) {
+            reportedTargets.add(target);
+            if (boundingClientRect?.width && boundingClientRect?.height) {
+              fieldRects.set(target, boundingClientRect);
+            }
           }
 
-          intersectionObserver.disconnect();
-          resolve(fieldBoundingClientRects);
+          if (reportedTargets.size >= targets.size) {
+            finish();
+          }
         },
         {
           root: globalThis.document.body,
@@ -1165,7 +1171,11 @@ export class AutofillOverlayContentService implements AutofillOverlayContentServ
           threshold: 0.9999, // Safari doesn't seem to function properly with a threshold of 1
         },
       );
-      intersectionObserver.observe(formFieldElement);
+
+      const fallbackTimeout = globalThis.setTimeout(finish, FIELD_RECTS_OBSERVER_TIMEOUT_MS);
+      for (const target of targets) {
+        intersectionObserver.observe(target);
+      }
     });
   }
 

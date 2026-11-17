@@ -1967,6 +1967,90 @@ describe("AutofillOverlayContentService", () => {
     });
   });
 
+  describe("updateMostRecentlyFocusedField", () => {
+    const OriginalIntersectionObserver = globalThis.IntersectionObserver;
+    let fieldElements: ElementWithOpId<HTMLInputElement>[];
+
+    beforeEach(() => {
+      fieldElements = [0, 1, 2, 3].map((index) => {
+        const input = document.createElement("input") as ElementWithOpId<HTMLInputElement>;
+        input.opid = `op-${index}`;
+        jest.spyOn(input, "getBoundingClientRect").mockReturnValue({
+          width: 100,
+          height: 20,
+          top: index * 30,
+          left: 10,
+          right: 110,
+          bottom: index * 30 + 20,
+          x: 10,
+          y: index * 30,
+          toJSON: () => ({}),
+        });
+        document.body.appendChild(input);
+        autofillOverlayContentService["formFieldElements"].set(
+          input,
+          createAutofillFieldMock({ opid: input.opid }),
+        );
+        return input;
+      });
+    });
+
+    afterEach(() => {
+      globalThis.IntersectionObserver = OriginalIntersectionObserver;
+      fieldElements.forEach((element) => element.remove());
+    });
+
+    it("measures every tracked field with a single intersection observer", async () => {
+      let observerCount = 0;
+      globalThis.IntersectionObserver = class extends OriginalIntersectionObserver {
+        constructor(...args: ConstructorParameters<typeof IntersectionObserver>) {
+          super(...args);
+          observerCount++;
+        }
+      };
+
+      await autofillOverlayContentService["updateMostRecentlyFocusedField"](fieldElements[2]);
+
+      expect(observerCount).toBe(1);
+      expect(sendExtensionMessageSpy).toHaveBeenCalledWith("updateFocusedFieldData", {
+        focusedFieldData: expect.objectContaining({
+          focusedFieldRects: { width: 100, height: 20, top: 60, left: 10 },
+        }),
+        allFieldsRect: fieldElements.map((element, index) =>
+          expect.objectContaining({
+            opid: element.opid,
+            rect: expect.objectContaining({ top: index * 30 }),
+          }),
+        ),
+      });
+    });
+
+    it("falls back to the element bounds when the intersection observer never reports", async () => {
+      jest.useFakeTimers();
+      globalThis.IntersectionObserver = class {
+        observe = jest.fn();
+        unobserve = jest.fn();
+        disconnect = jest.fn();
+        takeRecords = jest.fn((): IntersectionObserverEntry[] => []);
+      } as unknown as typeof IntersectionObserver;
+
+      const update = autofillOverlayContentService["updateMostRecentlyFocusedField"](
+        fieldElements[1],
+      );
+      await jest.advanceTimersByTimeAsync(100);
+      await update;
+
+      expect(sendExtensionMessageSpy).toHaveBeenCalledWith("updateFocusedFieldData", {
+        focusedFieldData: expect.objectContaining({
+          focusedFieldRects: { width: 100, height: 20, top: 30, left: 10 },
+        }),
+        allFieldsRect: expect.arrayContaining([
+          expect.objectContaining({ opid: "op-3", rect: expect.objectContaining({ top: 90 }) }),
+        ]),
+      });
+    });
+  });
+
   describe("refreshMenuLayerPosition", () => {
     it("calls refreshTopLayerPosition on the inline menu content service", () => {
       autofillOverlayContentService.refreshMenuLayerPosition();
