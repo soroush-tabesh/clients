@@ -977,6 +977,32 @@ describe("OverlayBackground", () => {
           expect(startInlineMenuFadeInNextSpy).toHaveBeenCalled();
         });
 
+        it("fades in the inline menu 50ms after the last position update", () => {
+          // This block runs under the fake timers installed by its `beforeEach`.
+          const fadeInMessage = expect.objectContaining({
+            command: "fadeInAutofillInlineMenuIframe",
+          });
+          const fadeInCalls = () =>
+            jest
+              .mocked(buttonPortSpy.postMessage)
+              .mock.calls.filter(
+                ([message]) => message?.command === "fadeInAutofillInlineMenuIframe",
+              );
+
+          overlayBackground["startInlineMenuFadeIn$"].next();
+          jest.advanceTimersByTime(30);
+          overlayBackground["startInlineMenuFadeIn$"].next();
+          jest.advanceTimersByTime(49);
+
+          expect(buttonPortSpy.postMessage).not.toHaveBeenCalledWith(fadeInMessage);
+
+          jest.advanceTimersByTime(1);
+
+          expect(buttonPortSpy.postMessage).toHaveBeenCalledWith(fadeInMessage);
+          expect(listPortSpy.postMessage).toHaveBeenCalledWith(fadeInMessage);
+          expect(fadeInCalls()).toHaveLength(1);
+        });
+
         it("rebuilds the sub frame offsets and retries when the focused frame's offsets are awaiting a rebuild", async () => {
           overlayBackground["focusedFieldData"] = createFocusedFieldDataMock({
             tabId,

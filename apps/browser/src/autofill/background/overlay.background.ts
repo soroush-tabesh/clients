@@ -389,8 +389,9 @@ export class OverlayBackground implements OverlayBackgroundInterface {
       .pipe(switchMap((sender) => this.updateInlineMenuPositionAfterRepositionEvent(sender)))
       .subscribe();
 
-    // FadeIn Observable behavior
-    merge(this.startInlineMenuFadeIn$.pipe(debounceTime(150)), this.cancelInlineMenuFadeIn$)
+    // FadeIn Observable behavior. The short debounce only coalesces the button and list position
+    // updates of a single open; repositions are already debounced by `startUpdateInlineMenuPosition$`.
+    merge(this.startInlineMenuFadeIn$.pipe(debounceTime(50)), this.cancelInlineMenuFadeIn$)
       .pipe(switchMap((cancelSignal) => this.triggerInlineMenuFadeIn(!!cancelSignal)))
       .subscribe();
 
