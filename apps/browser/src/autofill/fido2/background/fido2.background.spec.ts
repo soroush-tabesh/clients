@@ -213,12 +213,47 @@ describe("Fido2Background", () => {
         tabId: tabMock.id,
         injectDetails: sharedScriptInjectionDetails,
         mv2Details: { file: Fido2ContentScript.PageScriptDelayAppend },
-        mv3Details: { file: Fido2ContentScript.PageScript, world: "MAIN" },
+        mv3Details: undefined,
       });
       expect(scriptInjectorServiceMock.inject).toHaveBeenCalledWith({
         tabId: tabMock.id,
         injectDetails: contentScriptDetails,
       });
+    });
+
+    it("injects the content scripts under manifest v2 when `chrome.scripting` is unavailable", async () => {
+      const scripting = chrome.scripting;
+      Object.defineProperty(chrome, "scripting", { value: undefined, configurable: true });
+
+      try {
+        enablePasskeysMock$.next(true);
+        await flushPromises();
+      } finally {
+        Object.defineProperty(chrome, "scripting", { value: scripting, configurable: true });
+      }
+
+      expect(scriptInjectorServiceMock.inject).toHaveBeenCalledWith(
+        expect.objectContaining({
+          mv2Details: { file: Fido2ContentScript.PageScriptDelayAppend },
+        }),
+      );
+      expect(scriptInjectorServiceMock.inject).toHaveBeenCalledWith({
+        tabId: tabMock.id,
+        injectDetails: contentScriptDetails,
+      });
+    });
+
+    it("injects the page script into the main world under manifest v3", async () => {
+      isManifestVersionSpy.mockImplementation((manifestVersion) => manifestVersion === 3);
+
+      enablePasskeysMock$.next(true);
+      await flushPromises();
+
+      expect(scriptInjectorServiceMock.inject).toHaveBeenCalledWith(
+        expect.objectContaining({
+          mv3Details: { file: Fido2ContentScript.PageScript, world: "MAIN" },
+        }),
+      );
     });
 
     describe("given manifest v2", () => {

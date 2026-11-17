@@ -265,10 +265,11 @@ export class Fido2Background implements Fido2BackgroundInterface {
       tabId,
       injectDetails: { frame: "all_frames", ...this.sharedInjectionDetails },
       mv2Details: { file: await this.getFido2PageScriptAppendFileName() },
-      mv3Details: {
-        file: Fido2ContentScript.PageScript,
-        world: chrome.scripting.ExecutionWorld.MAIN,
-      },
+      // `chrome.scripting` does not exist under manifest v2 (e.g. Safari), so only read
+      // `ExecutionWorld` when the v3 details will actually be used.
+      mv3Details: BrowserApi.isManifestVersion(3)
+        ? { file: Fido2ContentScript.PageScript, world: chrome.scripting.ExecutionWorld.MAIN }
+        : undefined,
     });
 
     void this.scriptInjectorService.inject({
