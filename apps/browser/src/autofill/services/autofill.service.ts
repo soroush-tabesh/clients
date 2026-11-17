@@ -992,6 +992,41 @@ export default class AutofillService implements AutofillServiceInterface {
    * @returns {Promise<AutofillScript | null>}
    * @private
    */
+  /**
+   * Returns the password field the inline menu was anchored to when it was left out of
+   * `passwordFields` only because it was reported as not viewable.
+   *
+   * The viewable check samples the element at the field's center point, so a decorative
+   * overlay the page draws on top of its own input (a styled mask or placeholder) marks a
+   * field the user can see and has focused as hidden. `focusedFieldOpid` is only set for
+   * fills the user starts by choosing a credential in the inline menu on that field, so this
+   * exemption never applies to page-load or auto-submit fills, and never to any other
+   * hidden field on the page.
+   *
+   * @param pageDetails - The page details the fill script is generated for.
+   * @param passwordFields - Password fields that passed the regular viewable filtering.
+   * @param options - The fill script options.
+   */
+  private findFocusedHiddenPasswordField(
+    pageDetails: AutofillPageDetails,
+    passwordFields: AutofillField[],
+    options: GenerateFillScriptOptions,
+  ): AutofillField | undefined {
+    const focusedFieldOpid = options.focusedFieldOpid;
+    if (!focusedFieldOpid || passwordFields.some((field) => field.opid === focusedFieldOpid)) {
+      return undefined;
+    }
+
+    return AutofillService.loadPasswordFields(
+      pageDetails,
+      true,
+      false,
+      options.onlyEmptyFields,
+      options.fillNewPassword,
+      options.inlineMenuFillType,
+    ).find((field) => field.opid === focusedFieldOpid && !field.viewable);
+  }
+
   private async generateLoginFillScript(
     fillScript: AutofillScript,
     pageDetails: AutofillPageDetails,
@@ -1025,6 +1060,15 @@ export default class AutofillService implements AutofillServiceInterface {
       options.fillNewPassword,
       options.inlineMenuFillType,
     );
+
+    const focusedHiddenPasswordField = this.findFocusedHiddenPasswordField(
+      pageDetails,
+      passwordFields,
+      options,
+    );
+    if (focusedHiddenPasswordField) {
+      passwordFields.push(focusedHiddenPasswordField);
+    }
 
     const loginPasswordFields: AutofillField[] = [];
     const registrationPasswordFields: AutofillField[] = [];

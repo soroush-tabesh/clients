@@ -3291,6 +3291,101 @@ describe("AutofillService", () => {
         });
       });
 
+      describe("given a focused password field reported as not viewable", () => {
+        // A page can draw a decorative overlay on top of its own password input, which makes
+        // the center-point visibility check report the field the user focused as hidden.
+        let coveredPasswordField: AutofillField;
+        let decoyUsernameField: AutofillField;
+
+        beforeEach(() => {
+          coveredPasswordField = createAutofillFieldMock({
+            opid: "covered-password",
+            type: "password",
+            form: "login-form",
+            autoCompleteType: "current-password",
+            viewable: false,
+            elementNumber: 1,
+          });
+          decoyUsernameField = createAutofillFieldMock({
+            opid: "decoy-username",
+            type: "text",
+            form: "login-form",
+            viewable: false,
+            elementNumber: 0,
+          });
+          pageDetails.forms = {
+            "login-form": createAutofillFormMock({ opid: "login-form" }),
+          };
+          pageDetails.fields = [decoyUsernameField, coveredPasswordField];
+          jest.spyOn(autofillService as any, "inUntrustedIframe").mockResolvedValue(false);
+          jest.spyOn(AutofillService, "fillByOpid");
+        });
+
+        it("fills the password into the field the inline menu was anchored to", async () => {
+          options.focusedFieldOpid = "covered-password";
+
+          await autofillService["generateLoginFillScript"](
+            fillScript,
+            pageDetails,
+            filledFields,
+            options,
+          );
+
+          expect(AutofillService.fillByOpid).toHaveBeenCalledWith(
+            fillScript,
+            coveredPasswordField,
+            options.cipher.login.password,
+          );
+          expect(AutofillService.fillByOpid).not.toHaveBeenCalledWith(
+            fillScript,
+            decoyUsernameField,
+            expect.anything(),
+          );
+        });
+
+        it("does not fill the hidden password field without a focused field", async () => {
+          options.focusedFieldOpid = undefined;
+
+          await autofillService["generateLoginFillScript"](
+            fillScript,
+            pageDetails,
+            filledFields,
+            options,
+          );
+
+          expect(AutofillService.fillByOpid).not.toHaveBeenCalledWith(
+            fillScript,
+            coveredPasswordField,
+            expect.anything(),
+          );
+        });
+
+        it("does not fill a hidden password field the inline menu was not anchored to", async () => {
+          const otherHiddenPasswordField = createAutofillFieldMock({
+            opid: "other-hidden-password",
+            type: "password",
+            form: "login-form",
+            viewable: false,
+            elementNumber: 2,
+          });
+          pageDetails.fields = [decoyUsernameField, coveredPasswordField, otherHiddenPasswordField];
+          options.focusedFieldOpid = "covered-password";
+
+          await autofillService["generateLoginFillScript"](
+            fillScript,
+            pageDetails,
+            filledFields,
+            options,
+          );
+
+          expect(AutofillService.fillByOpid).not.toHaveBeenCalledWith(
+            fillScript,
+            otherHiddenPasswordField,
+            expect.anything(),
+          );
+        });
+      });
+
       describe("given a focused password-like field classified as registration", () => {
         // On a page with both a login form and a registration form, the
         // focused password field (classified as registration) must not be
